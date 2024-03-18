@@ -11,6 +11,8 @@ from noise_generator import wrap_interp_func, parse_noise_interp_dict
 
 from robot_dynamics import compute_Y, robot_dynamics, error_dynamics, filter_dynamics
 from matrix_operation import  drem_adapt, regularizing_operator, regressor
+from pseudo_signal import MaxLengthSequence3D
+import json
 
 
 import time
@@ -48,7 +50,7 @@ def measure_time_end(key):
 #   measure_time_end('et1')
 
 
-def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, noise_interp_dict):
+def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, noise_interp_dict, sequence3D):
 
     # if (t%0.01) == 0:
     #     print('t = {}'.format(t))
@@ -56,6 +58,7 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
 
     theta = f_const['theta']
     SWITCHFLAG = f_const['SWITCHFLAG']
+    CONTROLFLAG = f_const['CONTROLFLAG']
     DREMON = f_const['DREMON']
     q_d = f_const['q_d']
     Kv = control_gains['Kv']
@@ -66,7 +69,8 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
     Lambda_i = control_gains['Lambda_i'] # lambda for integral 
     Sigma_mod = control_gains['Sigma_mod'] # sigma modification
 
-    # ytheta_hat will be decomposed to q, qdot, theta_hat, Y_f, tau_f
+    # ytheta_hat will be decomposed to 
+    # q, qdot, theta_hat, Y_f, tau_f, e_i, phi2sum, P
 
     # add small observation noise to position and angle
     y = ytheta_hat[:6]  # + np.append(wn, fd) if system noise
@@ -77,9 +81,9 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
     # filter dynamics
 
     Y_f =   ytheta_hat[6+len(theta)                                   : 6+len(theta)+f_const['nrows']*f_const['ncols']].reshape([f_const['nrows'], f_const['ncols']])
-    # tau_f = ytheta_hat[6+len(theta)+f_const['nrows']*f_const['ncols'] : 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']]
+    tau_f = ytheta_hat[6+len(theta)+f_const['nrows']*f_const['ncols'] : 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']]
     ### note , exact theta should not be known here ###
-    tau_f = Y_f @ theta #ytheta_hat[6+len(theta)+f_const['nrows']*f_const['ncols'] : 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']]
+    tau_f_true = Y_f @ theta #ytheta_hat[6+len(theta)+f_const['nrows']*f_const['ncols'] : 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']]
     ####################################################
     # error integral
     e_i = ytheta_hat[ 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']:6 + len(theta) + f_const['nrows']*f_const['ncols'] + f_const['nrows'] + f_const['ndim'] ]
@@ -129,7 +133,10 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
     measure_time_begin()
     # Eq. 21
     # Ya = regressor(Ytheta_hat, theta_hat)  #np.dot(Ytheta_hat.reshape([-1,1]), np.linalg.pinv(theta_hat.reshape([-1,1])).T )
-    Ya = compute_Y(q_obs, q_dot_obs , qr_dot, qr_ddot)
+    if DREMON == 'YaZERO':
+        Ya = np.zeros(shape=(f_const['ndim'], f_const['ncols']))
+    else:
+        Ya = compute_Y(q_obs, q_dot_obs , qr_dot, qr_ddot)
     # Ya = compute_Y(q, q_dot, qr_dot, qr_ddot)
 
 
@@ -140,16 +147,10 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
 
 
     # s squared sum
-
-    if DREMON == True:
-        # update theta thorugh Psi
-        f_theta, phi2 = drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha) # Eq. 37
-        phi2 = [phi2]
- 
-    elif DREMON == 'DREM_ONLY':
+    if DREMON in ['DREM_ONLY', True, 'YaZERO']:
         # update theta thorugh Psi
         # force s = 0
-        f_theta, phi2 = drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha) # Eq. 37
+        f_theta, phi2 = drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha, phi0mode=f_const['PHI0MODE'], phieps=1e-2) # Eq. 37
         phi2 = [phi2]
     else:
         # no DREM case
@@ -163,9 +164,8 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
         # update f_theta
         f_theta = f_theta / (1 + phi2sum)
 
-
     # RLS asymptotic noise reduction
-    if f_const['ASYMDREM'] == 'RLS_P':
+    elif f_const['ASYMDREM'] == 'RLS_P':
         # update f_theta
         #f_theta = f_theta / (1 + phi2sum)
         #theta_hat_dot = theta_hat_dot / (1+phi2sum)
@@ -197,7 +197,7 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
 
 
 
-    if DREMON == 'DREM_ONLY':
+    if (DREMON in ['DREM_ONLY', 'YaZERO']) or f_const['PHI0MODE']:
         theta_hat_dot =  - Psi @ (                  f_theta ) # Eq. 38
     else:
         theta_hat_dot =  - Psi @ ( invP @ Ya.T @ s + f_theta) # Eq. 38
@@ -208,8 +208,8 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
 
     ####################################################
     measure_time_begin()
-    # apply thresholding for assimilation
     if (f_const['THREON'] == 'const') | (f_const['THREON'] == True):
+        # apply thresholding for assimilation
         theta_hat_dot = theta_dot_thre(theta_hat, theta, f_const['THRERT'], theta_hat_dot)
     elif f_const['THREON'] == 'Sigma_mod':
         # sigma modification
@@ -219,9 +219,24 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
         pass
 
  
-    tau =  - Kv @ regularizing_operator(s, alpha) + Ya @ theta_hat # Eq. 22     
+    if CONTROLFLAG == 'YaZERO':
+        tau =  - Kv @ s  # Eq. 22     
+    elif CONTROLFLAG == 'NOISEFEED':
+        tau = -Lambda @ Kv @ e_dot
+    else:
+        tau =  - Kv @ regularizing_operator(s, alpha) + Ya @ theta_hat # Eq. 22     
  
     measure_time_end('et4')
+
+    # external force for sys ID
+    if f_const['EXT_F'] == True:
+        #new_sequence3D = MaxLengthSequence3D.from_json(control_gains['Extern'])
+        #input = MaxLengthSequence3D.from_json(control_gains['Extern'])
+        input = sequence3D
+        #input = control_gains['Extern']
+        tau += input.get_value_at_time(t)
+    else:
+        pass
  
     ####################################################
     # true dynamics of robot

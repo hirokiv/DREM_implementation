@@ -3,6 +3,7 @@ from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 import math 
 import scipy
+from sklearn.decomposition import TruncatedSVD
 
 import sys
 sys.path.append('Cpp_lib')
@@ -109,14 +110,77 @@ def regularizing_operator(s, alpha):
     return reg_s
 
 
-def drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha):
+def trucatedSVDbyPercentage(A, variance_thre=0.5):
+    # Desired percentage of variance to retain
+    #variance_pct = 90  # for example, 90%
+
+    # Step 1: Perform full SVD
+    U, Sigma, VT = scipy.linalg.svd(A)
+    
+    # Step 2: Calculate total variance
+    total_variance = np.sum(Sigma**2)
+    # Step 3: Determine the number of components to keep
+    variance_sum = 0
+    num_components = 0
+    for s in Sigma:
+        variance_sum += s**2
+        num_components += 1
+        if (variance_sum / total_variance) >= variance_thre:
+            break
+
+    # Step 4: Perform Truncated SVD with the determined number of components
+    #svd = TruncatedSVD(n_components=num_components)
+    #A_reduced = svd.fit_transform(A)
+
+    # Components (V^T)
+    #Vt_r = svd.components_
+    Vt_r = VT[:num_components, :]
+    # Singular values (Σ)
+    #Sigma_r = np.diag(svd.singular_values_)
+    Sigma_r = Sigma[:num_components]
+    # Construct U from A_reduced and Sigma
+    #U_r = A_reduced @ np.linalg.inv(Sigma_r)
+    U_r = U[:, :num_components]
+
+    return U_r, Sigma_r, Vt_r
+
+# check if Sigma has significant information
+def checkSigmaSignificance(Sigma, threshold = 1e-5):
+    # if Sigma is a zero matrix
+    #is_zero_matrix = np.all(Sigma == 0)
+
+    # Check for significant information (set your own threshold)
+    # threshold = 0.01  # Example threshold
+    no_significant_information = np.all(np.abs(Sigma) < threshold)
+
+    return no_significant_information
+
+def drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha, phi0mode=False, phieps=1e-2, hardthre=False):
     # Eq 33 - Eq. 37
     phi = np.linalg.det(Y_f)
     # adjYf = compute_adjugate_scipy(Y_f)
-    adjYf = compute_adjugate_pybind11(Y_f)
-    phi_adjYf = phi*adjYf # do this first
-    phi_tau_e = phi_adjYf @ tau_f
-    f_theta = Gamma @ regularizing_operator( ((phi * phi) * theta_hat - phi_tau_e) , alpha)
+    if (phi0mode == True) & (phi < phieps):
+        U, S, Vt = trucatedSVDbyPercentage(Y_f, variance_thre=0.8)
+
+        if checkSigmaSignificance(S): 
+            # S has no significant information
+            Sigma_inv = np.zeros((len(S), len(S)))
+            Overall = np.zeros((len(Gamma), len(Gamma)))
+        else:
+            # S has sufficient information
+            Sigma_inv = np.diag(1/S)
+            Overall = np.eye(len(Gamma)) * 1e-15
+        f_theta = Overall @ Gamma @ Vt.T @ (Vt @ theta_hat - Sigma_inv @ U.T @ tau_f)
+
+        # hard thresholding to avoid overflow
+        if hardthre == True:
+            f_theta[abs(f_theta)>1e2] = np.sign( f_theta[abs(f_theta)>1e2] )*1e2
+        
+    else:
+        adjYf = compute_adjugate_pybind11(Y_f)
+        phi_adjYf = phi*adjYf # do this first
+        phi_tau_e = phi_adjYf @ tau_f
+        f_theta = Gamma @ regularizing_operator( ((phi * phi) * theta_hat - phi_tau_e) , alpha)
     return f_theta, phi*phi
 
 
