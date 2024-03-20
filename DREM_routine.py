@@ -25,7 +25,7 @@ elapsed_dict = {'et1': elapsed_times,
                 'et4': elapsed_times, 
                 'et5': elapsed_times, 
 }
-DEBUGTIME = 0
+DEBUGTIME = 1
 DSTARTTIME = 0 #define as global variable
 
 def measure_time_begin():
@@ -49,7 +49,29 @@ def measure_time_end(key):
 #   # some func to be measured
 #   measure_time_end('et1')
 
+ 
+def compute_tau(s, e_dot, Ya, theta_hat, control_gains, f_const):
+    if f_const['CONTROLFLAG'] == 'YaZERO':
+        tau =  - control_gains['Kv'] @ s  # Eq. 22     
+    elif f_const['CONTROLFLAG'] == 'NOISEFEED':
+        tau = - control_gains['Kv'] @ control_gains['Lambda'] @ e_dot
+    else:
+        tau =  - control_gains['Kv'] @ regularizing_operator(s, control_gains['alpha']) + Ya @ theta_hat # Eq. 22     
 
+    # Software thresholding 
+    if math.isfinite(f_const['TAUTHRE']):
+        index = np.abs(tau) > np.abs(f_const['TAUTHRE'])
+        tau[index] = np.sign(tau[index]) * np.abs(f_const['TAUTHRE'])
+
+    # if CONTROLFLAG == 'YaZERO':
+    #     tau =  - Kv @ s  # Eq. 22     
+    # elif CONTROLFLAG == 'NOISEFEED':
+    #     tau = - Kv @ Lambda @ e_dot
+    # else:
+    #     tau =  - Kv @ regularizing_operator(s, alpha) + Ya @ theta_hat # Eq. 22     
+    return tau
+
+ 
 def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, noise_interp_dict, sequence3D):
 
     # if (t%0.01) == 0:
@@ -80,10 +102,19 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
     ####################################################
     # filter dynamics
 
-    Y_f =   ytheta_hat[6+len(theta)                                   : 6+len(theta)+f_const['nrows']*f_const['ncols']].reshape([f_const['nrows'], f_const['ncols']])
-    tau_f = ytheta_hat[6+len(theta)+f_const['nrows']*f_const['ncols'] : 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']]
+    Y_f =   ytheta_hat[6+len(theta)                                   :
+                       6+len(theta)+f_const['nrows']*f_const['ncols']].reshape([f_const['nrows'], f_const['ncols']])
+
+    # either use true tau_f through computation or pseudo tauf enforced by Yf@theta
+    if f_const['pseudo_tauf']:
+       tau_f = Y_f @ theta #ytheta_hat[6+len(theta)+f_const['nrows']*f_const['ncols'] : 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']]
+    else:
+       tau_f = ytheta_hat[6+len(theta)+f_const['nrows']*f_const['ncols'] : 
+                       6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']]
     ### note , exact theta should not be known here ###
-    tau_f_true = Y_f @ theta #ytheta_hat[6+len(theta)+f_const['nrows']*f_const['ncols'] : 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']]
+
+
+
     ####################################################
     # error integral
     e_i = ytheta_hat[ 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']:6 + len(theta) + f_const['nrows']*f_const['ncols'] + f_const['nrows'] + f_const['ndim'] ]
@@ -121,7 +152,7 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
     # adding observation noise
     e_dot, e = error_dynamics(np.append(q_obs, q_dot_obs), q_d)
     # integral of error
-    ei = e
+    ei_dot = e
     qr_dot  = - Lambda@e
     qr_ddot = - Lambda@e_dot
  
@@ -150,7 +181,8 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
     if DREMON in ['DREM_ONLY', True, 'YaZERO']:
         # update theta thorugh Psi
         # force s = 0
-        f_theta, phi2 = drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha, phi0mode=f_const['PHI0MODE'], phieps=1e-2) # Eq. 37
+        f_theta, phi2 = drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha, phi0mode=f_const['PHI0MODE'], phieps=f_const['PHI0EPS']) # Eq. 37
+        #f_theta, phi2 = drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha, phi0mode=f_const['PHI0MODE'], phieps=1e-2) # Eq. 37
         phi2 = [phi2]
     else:
         # no DREM case
@@ -218,14 +250,8 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
         #print('THREON parameter undefined')
         pass
 
- 
-    if CONTROLFLAG == 'YaZERO':
-        tau =  - Kv @ s  # Eq. 22     
-    elif CONTROLFLAG == 'NOISEFEED':
-        tau = -Lambda @ Kv @ e_dot
-    else:
-        tau =  - Kv @ regularizing_operator(s, alpha) + Ya @ theta_hat # Eq. 22     
- 
+    tau = compute_tau(s, e_dot, Ya, theta_hat, control_gains, f_const) 
+
     measure_time_end('et4')
 
     # external force for sys ID
@@ -255,7 +281,7 @@ def robot_dynamics_w_control_adaptation(t, ytheta_hat, control_gains, f_const, n
     measure_time_end('et5')
     ##################################################
  
-    return np.concatenate([y_dot, theta_hat_dot, dYf.flatten(), dtauf.flatten(), ei, phi2, dP.flatten()])
+    return np.concatenate([y_dot, theta_hat_dot, dYf.flatten(), dtauf.flatten(), ei_dot, phi2, dP.flatten()])
 
 
 
@@ -281,7 +307,64 @@ def theta_dot_thre(theta_hat, theta, ratio, theta_hat_dot):
     else:
         raise ValueError("Not all elements are positive.")
 
+def tau_reconstructor(solved_y, t, f_const, control_gains, noise_interp_dict):
+    # reconstruct y from the solved ode
+    Lambda = control_gains['Lambda']
+    Lambda_i = control_gains['Lambda_i']
+    theta = f_const['theta']
+    q_d = f_const['q_d']
+    Kv = control_gains['Kv']
+    alpha = control_gains['alpha']
+    CONTROLFLAG = f_const['CONTROLFLAG']
+    DREMON = f_const['DREMON']
 
+
+    e_i = solved_y[ 6+len(theta)+f_const['nrows']*f_const['ncols'] + f_const['nrows']:6 + len(theta) + f_const['nrows']*f_const['ncols'] + f_const['nrows'] + f_const['ndim'] ]
+
+    ####################################################
+    # interpolate from precomputed noise information
+    # not sd calculation is too shallow and not used here
+    # wn, fd, sd = interp_dict_noise(t, noise_info) # whitenoise, its first derivative and second derivative
+    wn, fd, sd = parse_noise_interp_dict(t, noise_interp_dict)
+
+    # add small observation noise to position and angle
+    y = solved_y[:6]  # + np.append(wn, fd) if system noise
+    q = y[:3]
+    q_dot = y[3:6]
+    theta_hat = solved_y[6:6+len(theta)]
+    q_obs     = q + wn
+    q_dot_obs = q_dot + fd
+
+
+
+    # adding observation noise
+    e_dot, e = error_dynamics(np.append(q_obs, q_dot_obs), q_d)
+    # integral of error
+    qr_dot  = - Lambda@e
+    qr_ddot = - Lambda@e_dot
+ 
+    #H_hat, C_hat, D_hat, g_hat = compute_matrices(q, q_dot, theta_hat)
+    #Ytheta_hat = H_hat@qr_ddot + C_hat@qr_dot + D_hat@qr_dot + g_hat
+
+    ####################################################
+    # Eq. 21
+    # Ya = regressor(Ytheta_hat, theta_hat)  #np.dot(Ytheta_hat.reshape([-1,1]), np.linalg.pinv(theta_hat.reshape([-1,1])).T )
+    if DREMON == 'YaZERO':
+        Ya = np.zeros(shape=(f_const['ndim'], f_const['ncols']))
+    else:
+        Ya = compute_Y(q_obs, q_dot_obs , qr_dot, qr_ddot)
+    # Ya = compute_Y(q, q_dot, qr_dot, qr_ddot)
+
+
+    if f_const['INTEGRALERROR']:
+        s       = e_dot + control_gains['Lambda']@e + control_gains['Lambda_i'] @ e_i
+    else:
+        s       = e_dot + control_gains['Lambda']@e 
+
+
+    tau = compute_tau(s, e_dot, Ya, theta_hat, control_gains, f_const)
+
+    return tau
 
 if __name__ == '__main__':
 

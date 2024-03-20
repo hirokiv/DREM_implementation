@@ -93,7 +93,7 @@ def robot_dynamics(t, y, theta, tau):
 def error_dynamics(y, q_d):
     # for fixed target, simply q_dot
     q = y[:3]
-    q_dot = y[3:]
+    q_dot = y[3:6]
     e = q - q_d
     e_dot = q_dot
 

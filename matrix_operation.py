@@ -160,7 +160,7 @@ def drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha, phi0mode=False, phieps=1e-2,
     phi = np.linalg.det(Y_f)
     # adjYf = compute_adjugate_scipy(Y_f)
     if (phi0mode == True) & (phi < phieps):
-        U, S, Vt = trucatedSVDbyPercentage(Y_f, variance_thre=0.8)
+        U, S, Vt = trucatedSVDbyPercentage(Y_f, variance_thre=0.95)
 
         if checkSigmaSignificance(S): 
             # S has no significant information
@@ -169,19 +169,20 @@ def drem_adapt(theta_hat, tau_f, Y_f, Gamma, alpha, phi0mode=False, phieps=1e-2,
         else:
             # S has sufficient information
             Sigma_inv = np.diag(1/S)
-            Overall = np.eye(len(Gamma)) * 1e-15
+            Overall = np.eye(len(Gamma)) * 1e-3
         f_theta = Overall @ Gamma @ Vt.T @ (Vt @ theta_hat - Sigma_inv @ U.T @ tau_f)
 
-        # hard thresholding to avoid overflow
-        if hardthre == True:
-            f_theta[abs(f_theta)>1e2] = np.sign( f_theta[abs(f_theta)>1e2] )*1e2
+        # # hard thresholding to avoid overflow
+        # if hardthre == True:
+        #     f_theta[abs(f_theta)>1e2] = np.sign( f_theta[abs(f_theta)>1e2] )*1e2
         
     else:
         adjYf = compute_adjugate_pybind11(Y_f)
         phi_adjYf = phi*adjYf # do this first
         phi_tau_e = phi_adjYf @ tau_f
-        f_theta = Gamma @ regularizing_operator( ((phi * phi) * theta_hat - phi_tau_e) , alpha)
-    return f_theta, phi*phi
+        phi2 = phi*phi
+        f_theta = Gamma @ regularizing_operator( ((phi2) * theta_hat - phi_tau_e) , alpha)
+    return f_theta, phi2
 
 
 

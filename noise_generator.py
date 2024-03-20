@@ -74,13 +74,16 @@ def wrap_interp_func(time, noise_info):
     def interp_func(time, white_noise, first_derivative, second_derivative): 
         # Create interpolation functions
         # For white noise, we use the original time array
-        interp_wn = interp1d(time, white_noise, kind='linear')
+
+        noise_time = np.linspace(time[0], time[-1], len(white_noise)) 
+
+        interp_wn = interp1d(noise_time, white_noise, kind='linear')
         
         # For the first derivative, we need to exclude the last time point due to np.diff
-        interp_fd = interp1d(time, first_derivative, kind='linear')
+        interp_fd = interp1d(noise_time, first_derivative, kind='linear')
         
         # For the second derivative, we need to exclude the last two time points
-        interp_sd = interp1d(time, second_derivative, kind='linear')
+        interp_sd = interp1d(noise_time, second_derivative, kind='linear')
     
         return interp_wn, interp_fd, interp_sd
 

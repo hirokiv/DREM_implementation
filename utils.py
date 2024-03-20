@@ -3,7 +3,7 @@ import numpy as np
 import os
 import json
 import pickle
-
+from DREM_routine import robot_dynamics_w_control_adaptation, tau_reconstructor
 
 def check_dir(directory_path):
     # Use os.makedirs() to create the directory if it doesn't exist
@@ -15,7 +15,7 @@ def check_dir(directory_path):
 
 
 #def analysis_result(t,y,q_d,theta_hat0,theta,ndim,nfilter,SWITCHFLAG,save=False,savepath='',figshow=1):
-def analysis_result(t,y,theta_hat0,f_const,save=False,savepath='',figshow=1, ):
+def analysis_result(t,y,theta_hat0,f_const, control_gains, noise_interp_dict, save=False,savepath='',figshow=1, ):
 
     q_d = f_const['q_d']
     theta = f_const['theta']
@@ -37,16 +37,85 @@ def analysis_result(t,y,theta_hat0,f_const,save=False,savepath='',figshow=1, ):
         plt.plot(t, [q_d[i]]*len(t), label=f'Joint {i+1} Target (rad)')
         plt.legend()
     plt.xlabel('Time (s)')
+    plt.grid()
     
     if save == True:
-        savepath = img_savepath + '/control_result.png'
+        savepath = img_savepath + '/img_control_result.png'
         plt.savefig(savepath)
     if figshow == 1:
         plt.show()
     plt.close()
 
+    #####################
+    # Plot the tau_f results
+    #####################
+    plt.figure(figsize=(12, 8))
+    tau_idx = 2 * ndim + f_const['nrows'] + f_const['nrows']*f_const['ncols']  # y, theta_hat, Yf
+    for i in range(f_const['nrows']) :
+        plt.subplot(12, 1, i+1)
+        plt.plot(t, y[i+tau_idx], label=f'Tau_f {i+1} history ')
+        plt.legend()
+        plt.grid()
+    plt.xlabel('Time (s)')
     
+    if save == True:
+        savepath = img_savepath + '/img_tauf_result.png'
+        plt.savefig(savepath)
+    if figshow == 1:
+        plt.show()
+    plt.close()
 
+
+
+
+    #####################
+    # Reconstruct tauf from Yf and true theta
+    tauf_recon = np.zeros((f_const['nrows'], len(t)))
+    for idx in np.arange(len(t)):
+        #theta_hat = y[6:6+len(theta)][idx] 
+        Yf_recon =  y[6+len(theta):6+len(theta)+f_const['nrows']*f_const['ncols']][:,idx].reshape([f_const['nrows'], f_const['ncols']]) 
+        tauf_recon[:, idx] = Yf_recon @ theta
+    
+    plt.figure(figsize=(12, 8))
+    tau_idx = 2 * ndim + f_const['nrows'] + f_const['nrows']*f_const['ncols']  # y, theta_hat, Yf
+    for i in range(f_const['nrows']) :
+        plt.subplot(12, 1, i+1)
+        plt.plot(t, tauf_recon[i, :], label=f'Tau_f reconstructed {i+1} history ' )
+        plt.legend(loc='right')
+        plt.grid()
+    plt.xlabel('Time (s)')
+
+    if save == True:
+        savepath = img_savepath + '/img_tauf_reconstruct_result.png'
+        plt.savefig(savepath)
+    if figshow == 1:
+        plt.show()
+    plt.close()
+
+
+    #####################
+    # Plot real tau-s
+    #####################
+    true_tau = np.zeros((f_const['ndim'], len(t)))
+    for idx, temp in enumerate(t):
+        true_tau[:, idx] = tau_reconstructor(y[:,idx], temp, f_const, control_gains, noise_interp_dict)
+    plt.figure(figsize=(12, 5))
+    for i in range(f_const['ndim']) :
+        plt.subplot(3, 1, i+1)
+        plt.plot(t, true_tau[i,:], label=f'True Tau {i+1} history ')
+        plt.legend()
+        plt.grid()
+    plt.xlabel('Time (s)')
+    
+    if save == True:
+        savepath = img_savepath + '/img_true_tau.png'
+        plt.savefig(savepath)
+    if figshow == 1:
+        plt.show()
+    plt.close()
+
+
+    #####################
     # Assimilation error dynamics
     pdim = len(theta_hat0)
     # Plot the results
@@ -66,6 +135,7 @@ def analysis_result(t,y,theta_hat0,f_const,save=False,savepath='',figshow=1, ):
             plt.plot(t, [0]*len(t), 'k--') #, label=f'Theta {i+1} error' )
             # plt.plot(t, [theta[i]]*len(t), label=f'Theta {i+1} true')
             plt.legend(loc='right')
+            plt.grid()
     
             # magnified case
             if iter ==  1:
@@ -74,9 +144,9 @@ def analysis_result(t,y,theta_hat0,f_const,save=False,savepath='',figshow=1, ):
      
         if save == True:
             if iter == 0 : 
-                savepath = img_savepath + '/parameter_estimation.png'
+                savepath = img_savepath + '/img_parameter_estimation.png'
             elif iter == 1:
-                savepath = img_savepath + '/parameter_estimation_magnified.png'
+                savepath = img_savepath + '/img_parameter_estimation_magnified.png'
             plt.savefig(savepath)   
         if figshow == 1:
             plt.show()
@@ -98,9 +168,10 @@ def analysis_result(t,y,theta_hat0,f_const,save=False,savepath='',figshow=1, ):
     plt.plot(t,phi2t)
     plt.ylabel('\phi^2')
     plt.xlabel('t')
+    plt.grid()
      
     if save == True:
-        savepath = img_savepath + '/phi2.png'
+        savepath = img_savepath + '/img_phi2.png'
         plt.savefig(savepath)   
     if figshow == 1:
         plt.show()
